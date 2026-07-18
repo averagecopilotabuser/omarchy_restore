@@ -1,12 +1,12 @@
 # omarchy-restore
 
-A safe, theme-aware terminal UI for restoring a `home.tar.xz` backup (including
-all your personal data, Omarchy configs, and custom themes) onto a fresh
-[Omarchy](https://omarchy.org/) install.
+A safe, theme-aware terminal UI for creating and restoring a `home.tar.xz`
+backup of your Omarchy home directory — themes, configs, dotfiles, and all your
+personal data — onto a fresh [Omarchy](https://omarchy.org/) install.
 
 > **Important**: omarchy-restore runs entirely as the current user. It only
-> writes inside the target directory (default `$HOME`). It never uses `sudo`
-> and never modifies system paths (`/etc`, `/usr`, `/var`, etc.).
+> reads and writes inside your home directory (default `$HOME`). It never uses
+> `sudo` and never touches system paths (`/etc`, `/usr`, `/var`, etc.).
 
 ## Table of contents
 
@@ -14,16 +14,22 @@ all your personal data, Omarchy configs, and custom themes) onto a fresh
 - [Features](#features)
 - [Install](#install)
 - [Usage](#usage)
-  - [Basic TUI](#basic-tui)
-  - [CLI flags](#cli-flags)
+  - [Restore mode](#restore-mode)
+  - [Backup mode](#backup-mode)
   - [Non-interactive report](#non-interactive-report)
 - [The TUI screens](#the-tui-screens)
-  - [1. Welcome](#1-welcome)
-  - [2. Preview](#2-preview)
+  - [1. Welcome (restore)](#1-welcome-restore)
+  - [2. Preview (restore)](#2-preview-restore)
   - [3. Diff](#3-diff)
-  - [4. Confirm](#4-confirm)
+  - [4. Confirm (restore)](#4-confirm-restore)
   - [5. Progress](#5-progress)
-  - [6. Done](#6-done)
+  - [6. Done (restore)](#6-done-restore)
+  - [Backup screens](#backup-screens)
+    - [Backup Welcome](#backup-welcome)
+    - [Backup Preview](#backup-preview)
+    - [Backup Confirm](#backup-confirm)
+    - [Backup Progress](#backup-progress)
+    - [Backup Done](#backup-done)
 - [File categorization](#file-categorization)
 - [Safety guarantees](#safety-guarantees)
 - [Safe extraction details](#safe-extraction-details)
@@ -70,6 +76,8 @@ omarchy-restore gives you complete control:
 - **Selective restore** — toggle any file or category on or off in the TUI.
 - **Omarchy-aware categorization** — files are sorted into 9 categories
   (see [table below](#file-categorization)), each with sensible defaults.
+- **Backup creation** — scan your home folder, review by Omarchy category, and
+  create a timestamped compressed `tar.xz` archive with sensible defaults.
 - **Safety guarantees** — refuses to write anything that escapes the target
   directory, refuses unsafe symlinks/hardlinks, writes via temp+fsync+rename.
 - **Theme-aware aesthetic** — automatically picks up the active Omarchy
@@ -94,29 +102,54 @@ The tool is published as a single Python package. After install the
 
 ## Usage
 
-### Basic TUI
+### Restore mode
 
 ```bash
-omarchy-restore /path/to/home.tar.xz
+omarchy-restore restore /path/to/home.tar.xz
 ```
 
-Opens the interactive TUI. Walk through the 6 screens (Welcome → Preview →
+Opens the interactive TUI. Walk through the restore screens (Welcome → Preview →
 Diff → Confirm → Progress → Done) to inspect, select, and restore your backup.
+
+For backward compatibility, `omarchy-restore /path/to/home.tar.xz` (without the
+`restore` subcommand) also works and defaults to restore mode.
+
+### Backup mode
+
+```bash
+omarchy-restore backup [source]
+```
+
+Scans a source directory (default `$HOME`) and opens the TUI to review and
+create a compressed `tar.xz` archive. Output defaults to a timestamped file
+like `~/omarchy-backup-20260718-143022.tar.xz`.
+
+Both modes accept `--dry-run` to preview without writing, `--yes` to skip the
+TUI, and `--theme` / `--no-theme` to control theming.
 
 ### CLI flags
 
 ```
-omarchy-restore [archive.tar.xz]
+# Restore
+omarchy-restore restore [archive.tar.xz]
   [--target DIR]                          target directory (default: $HOME)
   [--dry-run]                             preview and exit (no writes)
   [--diff-only]                           print diff report as plain text, exit
   [--yes]                                 skip confirmation (use with care)
   [--theme NAME]                          load a specific Omarchy theme by name
   [--no-theme]                            force the monochrome fallback palette
-  [--print-theme]                         print the resolved theme palette, exit
   [--watch-theme]                         re-read the Omarchy theme every 2 s
   [--keep-capabilities]                   preserve setuid/setgid/sticky bits
   [--no-color]                            disable ANSI color in --diff-only output
+
+# Backup
+omarchy-restore backup [source]
+  [--output, -o FILE]                     output archive path (default: timestamped)
+  [--dry-run]                             scan and print summary, no archive
+  [--yes]                                 skip confirmation, create immediately
+
+# Global
+omarchy-restore --print-theme             print the resolved theme palette, exit
 ```
 
 ### Non-interactive report
@@ -125,8 +158,32 @@ omarchy-restore [archive.tar.xz]
 # Print the full diff as plain text (useful for scripts)
 omarchy-restore /path/to/home.tar.xz --diff-only
 
+# Scan a directory without creating an archive
+omarchy-restore backup ~/Documents --dry-run
+
 # Print just the resolved theme palette
 omarchy-restore --print-theme
+```
+
+#### Backup `--dry-run` output:
+
+```
+Source:  /home/user
+Output:  /home/user/omarchy-backup-20260718-143022.tar.xz
+
+Included files:  1234
+Included bytes:  2.3 GB
+Excluded:        567
+Total scanned:   1801
+
+By category:
+  ·: 1120
+  S:   45
+  O:    3
+  H:    8
+  K:   12
+  M:    6
+  A:  567   (excluded)
 ```
 
 Example `--diff-only` output:
@@ -150,13 +207,13 @@ single-letter column is the category chip.
 
 ## The TUI screens
 
-### 1. Welcome
+### 1. Welcome (restore)
 
 Enter the path to your `home.tar.xz` archive and the target directory (defaults
 to `$HOME`). The tool validates that the archive is readable and that the
 target is not a system path before proceeding.
 
-### 2. Preview
+### 2. Preview (restore)
 
 Shows a summary of the archive:
 
@@ -204,7 +261,7 @@ The core screen. Every member of the archive is shown in a table with columns:
 Files that are `! REJECT` are unsafe and cannot be included (they have a
 `reason` explaining why, e.g. "absolute member name: /etc/shadow").
 
-### 4. Confirm
+### 4. Confirm (restore)
 
 A final summary before writing:
 
@@ -244,7 +301,7 @@ Restore complete
 
 Press `q` to cancel mid-restore.
 
-### 6. Done
+### 6. Done (restore)
 
 Final summary and a checklist of Omarchy components that were touched:
 
@@ -257,6 +314,82 @@ Reload Omarchy components:
   [ ]  Restart Waybar
   [ ]  Restart terminal
   [ ]  Set theme: my-custom
+```
+
+Press `q` to exit.
+
+### Backup screens
+
+When run in backup mode (`omarchy-restore backup`), the TUI shows a different
+set of screens tailored to creating an archive.
+
+#### Backup Welcome
+
+Enter the source directory (defaults to `$HOME`) and an output path. The tool
+validates the source is readable and not a system path.
+
+#### Backup Preview
+
+After scanning the source, shows a summary:
+
+```
+Source:  /home/user
+Output:  /home/user/omarchy-backup-20260718-143022.tar.xz
+
+Included files:  1234
+Included bytes:  2.3 GB
+Excluded:        567
+
+By category:
+  S: 45  ·: 1120  O: 3  H: 8  K: 12  M: 6
+```
+
+Press `c` or click **Create backup** to proceed.
+
+#### Backup Confirm
+
+A final summary before creating the archive:
+
+```
+Source:    /home/user
+Output:    /home/user/omarchy-backup-20260718-143022.tar.xz
+
+Files:     1234
+Bytes:     2.3 GB
+Excluded:  567
+
+  S: 45
+  O: 3
+  H: 8
+  ...
+```
+
+Press `Y` to begin creating the archive.
+
+#### Backup Progress
+
+A progress bar and scrollable event log showing every file as it's archived:
+
+```
+  ✓ .bashrc
+  ✓ .config/hypr/hyprland.conf
+  ✓ .ssh/id_ed25519
+  ✓ Documents/notes.txt
+  - .cache/thumbnails/big.jpg  (excluded)
+
+Backup complete
+```
+
+Press `q` to cancel mid-backup. The temp file is cleaned up automatically.
+
+#### Backup Done
+
+Final summary with the output archive path:
+
+```
+Archive: /home/user/omarchy-backup-20260718-143022.tar.xz
+Files:   1234
+Bytes:   2.3 GB
 ```
 
 Press `q` to exit.
@@ -383,7 +516,7 @@ only appear if their config directory was actually written:
 
 ```bash
 # Clone and enter the repo
-cd /home/arslaan/Work/python/tar_backup_tui
+git clone <repo-url> && cd tar_backup_tui
 
 # Create a venv and install in editable mode
 python3 -m venv .venv
@@ -397,11 +530,16 @@ python3 -m venv .venv
 .venv/bin/pyright src/ tests/
 ```
 
-Build a test fixture for manual testing:
+Build test fixtures for manual testing:
 
 ```bash
+# Test restore flow
 .venv/bin/python examples/make_fixture.py /tmp/test-fixture.tar.xz
-.venv/bin/omarchy-restore --diff-only /tmp/test-fixture.tar.xz --target /tmp/test-target
+.venv/bin/python -m omarchy_restore restore --diff-only /tmp/test-fixture.tar.xz --target /tmp/test-target
+
+# Test backup flow
+.venv/bin/python -m omarchy_restore backup /tmp/test-target --dry-run
+.venv/bin/python -m omarchy_restore backup /tmp/test-target -o /tmp/test-backup.tar.xz --yes
 ```
 
 ## Project structure
@@ -411,18 +549,18 @@ src/omarchy_restore/
 ├── __init__.py
 ├── __main__.py          # CLI entry point (argparse)
 ├── archive.py           # tar.xz streaming
+├── backup.py            # backup creation engine
 ├── diff.py              # archive-vs-disk comparison
 ├── omarchy.py           # path categorization (9 categories)
 ├── paths.py             # file-system safety checks
 ├── restore.py           # safe extraction worker
 └── tui/
     ├── __init__.py
-    ├── screens.py       # App root + 6 screens
-    ├── styles.tcss      # reference CSS (runtime-generated)
-    ├── theme.py         # Omarchy theme palette loader
-    └── widgets.py       # custom widgets
+    ├── screens.py       # App root + all screens (restore + backup)
+    └── theme.py         # Omarchy theme palette loader
 tests/
 ├── test_app.py          # CLI, diff report, smoke tests
+├── test_backup.py       # backup engine
 ├── test_diff.py         # diff engine
 ├── test_omarchy.py      # categorization
 ├── test_paths.py        # safety (most important tests)

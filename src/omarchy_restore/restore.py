@@ -21,6 +21,8 @@ from __future__ import annotations
 import contextlib
 import os
 import tempfile
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -88,7 +90,7 @@ def _write_regular(tf, member, dest: Path, keep_capabilities: bool) -> int:
             out.flush()
             os.fsync(out.fileno())
         os.replace(tmp_path, dest)
-    except BaseException:
+    except Exception:
         try:
             if tmp_path.exists():
                 tmp_path.unlink()
@@ -118,7 +120,8 @@ def restore_rows(
     rows: list[DiffRow],
     *,
     keep_capabilities: bool = False,
-    on_event=None,
+    on_event: Callable[[RestoreEvent], object] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> RestoreResult:
     """Restore the (include=True, non-REJECT) rows from ``archive``.
 
@@ -137,6 +140,10 @@ def restore_rows(
         for member in tf:
             if member.name not in include_names:
                 continue
+            if cancel_event is not None and cancel_event.is_set():
+                if on_event:
+                    on_event(RestoreEvent("done", "", "cancelled"))
+                return result
             ev: RestoreEvent | None = None
             try:
                 dest = safe_join(target, member.name)

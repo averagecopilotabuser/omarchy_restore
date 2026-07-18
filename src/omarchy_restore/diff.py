@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from omarchy_restore.archive import open_archive
 from omarchy_restore.omarchy import Category, categorize
 from omarchy_restore.paths import SafetyVerdict, check_member
 
@@ -130,12 +131,6 @@ class DiffRow:
         )
 
 
-def _same_mtime_ns(a: int, b: int) -> bool:
-    # tar mtime is seconds; allow a 1-second rounding tolerance because many
-    # tools store integer seconds and filesystem mtime_ns has sub-second.
-    return abs(a // 1_000_000_000 - b) <= 1
-
-
 # --- High level API --------------------------------------------------------
 
 
@@ -187,8 +182,6 @@ def compare_member_content(
 
 def build_diff(archive: str | os.PathLike[str], target: Path) -> DiffResult:
     """Compute the full diff for an archive against ``target``."""
-    from omarchy_restore.archive import open_archive
-
     result = DiffResult()
     try:
         with open_archive(archive) as tf:

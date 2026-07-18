@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import tarfile
+import threading
 from pathlib import Path
 
 from textual import on
@@ -24,6 +25,12 @@ from textual.widgets import (
 )
 
 from omarchy_restore.archive import archive_summary, open_archive
+from omarchy_restore.backup import (
+    BackupEvent,
+    create_backup,
+    default_output_name,
+    scan_source,
+)
 from omarchy_restore.diff import DiffRow, DiffStatus, build_diff
 from omarchy_restore.omarchy import Category, list_custom_themes
 from omarchy_restore.paths import resolve_target
@@ -34,11 +41,14 @@ from omarchy_restore.tui.theme import load_active_theme
 
 
 def _format_bytes(n: int) -> str:
+    f = float(n)
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if abs(n) < 1024:
-            return f"{n}{unit}"
-        n //= 1024
-    return f"{n}PB"
+        if abs(f) < 1024:
+            if unit == "B":
+                return f"{n}B"
+            return f"{f:.1f}{unit}"
+        f /= 1024
+    return f"{f:.1f}PB"
 
 
 # ── Screen 1: Welcome ─────────────────────────────────────────────────────
@@ -139,6 +149,7 @@ class WelcomeScreen(Screen):
         app = self.app
         app.archive_path = str(archive_path)
         app.target_path = target
+        app.diff_rows = []
         await app.push_screen("preview")
 
 
@@ -284,10 +295,12 @@ class DiffScreen(Screen):
         self._load_diff()
 
     def _load_diff(self) -> None:
-        self._all_rows = build_diff(
-            self.app.archive_path,
-            Path(self.app.target_path),
-        ).rows
+        if not self.app.diff_rows:
+            self.app.diff_rows = build_diff(
+                self.app.archive_path,
+                Path(self.app.target_path),
+            ).rows
+        self._all_rows = list(self.app.diff_rows)
         self._apply_filter()
 
     def _apply_filter(self) -> None:
@@ -361,7 +374,8 @@ class DiffScreen(Screen):
 
     def action_select_all(self) -> None:
         for r in self._all_rows:
-            r.include = True
+            if r.status is not DiffStatus.REJECT:
+                r.include = True
         self._apply_filter()
 
     def action_confirm(self) -> None:
@@ -438,6 +452,8 @@ class ConfirmScreen(Screen):
 
 class ProgressScreen(Screen):
     BINDINGS = [("q", "cancel_restore", "Cancel")]
+
+    _cancel_event: threading.Event
     CSS = """
     ProgressScreen {
         align: center middle;
@@ -465,6 +481,7 @@ class ProgressScreen(Screen):
             yield Static("q cancel \u2022 restore in progress", classes="help-text")
 
     def on_mount(self) -> None:
+        self._cancel_event = threading.Event()
         self.run_worker(self._run_restore(), exclusive=True)
 
     async def _run_restore(self) -> None:
@@ -507,11 +524,13 @@ class ProgressScreen(Screen):
             Path(self.app.target_path),
             rows,
             on_event=on_event,  # type: ignore[reportCallIssue]
+            cancel_event=self._cancel_event,  # type: ignore[reportCallIssue]
         )
         await asyncio.sleep(0.3)
         await self.app.push_screen("done")
 
     def action_cancel_restore(self) -> None:
+        self._cancel_event.set()
         self.app.pop_screen()
 
 
@@ -550,15 +569,19 @@ class DoneScreen(Screen):
             f"Total bytes:    {_format_bytes(sum(r.archive_size for r in written))}"
         )
         touched_names = [r.name for r in written]
-        touched_all = " ".join(touched_names)
         reload_items: list[tuple[str, str]] = []
-        if "hypr/" in touched_all:
+        def _any_prefix(paths: list[str], prefix: str) -> bool:
+            return any(p.startswith(prefix) for p in paths)
+        if _any_prefix(touched_names, ".config/hypr/"):
             reload_items.append(("Reload Hyprland", "hyprctl reload"))
-        if "waybar/" in touched_all:
+        if _any_prefix(touched_names, ".config/waybar/"):
             reload_items.append(("Restart Waybar", "omarchy restart waybar"))
-        if any(t in touched_all for t in ("alacritty/", "foot/", "kitty/", "ghostty/")):
+        if _any_prefix(touched_names, ".config/alacritty/") or \
+           _any_prefix(touched_names, ".config/foot/") or \
+           _any_prefix(touched_names, ".config/kitty/") or \
+           _any_prefix(touched_names, ".config/ghostty/"):
             reload_items.append(("Restart terminal", "omarchy restart terminal"))
-        if "walker/" in touched_all:
+        if _any_prefix(touched_names, ".config/walker/"):
             reload_items.append(("Restart Walker", "omarchy restart walker"))
         theme_names = list_custom_themes(touched_names)
         for tn in theme_names:
@@ -566,6 +589,325 @@ class DoneScreen(Screen):
         lv = self.query_one("#reload-list", ListView)
         for label, _cmd in reload_items:
             lv.append(ListItem(Label(f"  [ ]  {label}")))
+
+    def action_done(self) -> None:
+        self.app.pop_screen()
+
+
+# ── Backup screens ─────────────────────────────────────────────────────────
+
+
+class BackupWelcomeScreen(Screen):
+    CANCEL_KEY = "q"
+    CSS = """
+    BackupWelcomeScreen {
+        align: center middle;
+    }
+    .wordmark {
+        text-style: bold;
+        color: $fg;
+        content-align: center top;
+        height: 3;
+    }
+    .tagline {
+        color: $fg-dim;
+        height: 1;
+        content-align: center top;
+    }
+    .field-label {
+        color: $fg-mute;
+        text-style: bold;
+        height: 1;
+    }
+    Input {
+        border: solid $border;
+        background: $bg;
+        color: $fg;
+        padding: 0 1;
+        height: 3;
+        width: 40;
+        margin: 0 0 1 0;
+    }
+    Input:focus {
+        border: solid $border-active;
+        background: $bg-elevated;
+    }
+    #scan-button {
+        background: $bg-elevated;
+        color: $fg;
+        border: solid $border;
+        padding: 0 2;
+        height: 3;
+        margin: 1 0 0 0;
+    }
+    #scan-button:focus {
+        border: solid $border-active;
+    }
+    .error { color: $fg-dim; text-style: bold; height: 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("█ █ omarchy-restore", classes="wordmark")
+            yield Static("Create a backup of your Omarchy home", classes="tagline")
+            yield Static("Source directory", classes="field-label")
+            yield Input(
+                placeholder=os.path.expanduser("~"),
+                id="source-input",
+                value=os.path.expanduser("~"),
+            )
+            yield Static("Output archive", classes="field-label")
+            yield Input(
+                placeholder="~/omarchy-backup-20260718-143022.tar.xz",
+                id="output-input",
+            )
+            with Horizontal():
+                yield Button("Scan directory", id="scan-button", variant="default")
+            yield Label("", id="backup-welcome-error", classes="error")
+
+    @on(Button.Pressed, "#scan-button")
+    async def on_scan(self) -> None:
+        src = self.query_one("#source-input", Input).value.strip()
+        out = self.query_one("#output-input", Input).value.strip()
+        err = self.query_one("#backup-welcome-error", Label)
+        if not src:
+            err.update("Please enter a source directory")
+            return
+        source = Path(src).expanduser()
+        if not source.is_dir():
+            err.update(f"Not a directory: {source}")
+            return
+        try:
+            from omarchy_restore.paths import resolve_target
+            resolve_target(str(source))
+        except Exception as exc:
+            err.update(str(exc))
+            return
+        if not out:
+            out = str(Path.home() / default_output_name())
+        output = Path(out).expanduser()
+
+        try:
+            stats = scan_source(source)
+        except Exception as exc:
+            err.update(f"Scan error: {exc}")
+            return
+
+        app = self.app
+        app.source_path = str(source)
+        app.output_path = str(output)
+        app.backup_scan = stats
+        await app.push_screen("backup_preview")
+
+
+class BackupPreviewScreen(Screen):
+    BINDINGS = [
+        ("c", "proceed_to_confirm", "Create"),
+        ("q", "app.pop_screen", "Back"),
+    ]
+    CSS = """
+    BackupPreviewScreen { align: center middle; }
+    #backup-preview-summary {
+        color: $fg-dim;
+        margin: 1 2;
+        height: auto;
+    }
+    #backup-create-button {
+        background: $bg-elevated;
+        color: $fg;
+        border: solid $border;
+        padding: 0 2;
+        margin: 1 0;
+    }
+    #backup-create-button:focus { border: solid $border-active; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("Backup · scan summary", classes="screen-title")
+            yield Static("", id="backup-preview-summary")
+            yield Button("Create backup", id="backup-create-button", variant="primary")
+
+    def on_mount(self) -> None:
+        stats = getattr(self.app, "backup_scan", None)
+        if stats is None:
+            self.query_one("#backup-preview-summary", Static).update("No scan data.")
+            return
+        lines = [
+            f"Source:  {self.app.source_path}",
+            f"Output:  {self.app.output_path}",
+            "",
+            f"Included files:  {stats.included_files}",
+            f"Included bytes:  {_format_bytes(stats.included_bytes)}",
+            f"Excluded:        {stats.excluded}",
+            f"Total scanned:   {stats.total_files}",
+            "",
+            "By category:",
+        ]
+        for cat_key, count in sorted(stats.per_category.items()):
+            lines.append(f"  {cat_key}: {count}")
+        self.query_one("#backup-preview-summary", Static).update("\n".join(lines))
+
+    @on(Button.Pressed, "#backup-create-button")
+    async def proceed_to_confirm(self) -> None:
+        await self.app.push_screen("backup_confirm")
+
+    def action_proceed_to_confirm(self) -> None:
+        self.app.push_screen("backup_confirm")
+
+
+class BackupConfirmScreen(Screen):
+    BINDINGS = [
+        ("y", "do_backup", "Y Backup"),
+        ("q", "app.pop_screen", "Back"),
+    ]
+    CSS = """
+    BackupConfirmScreen { align: center middle; }
+    .screen-title { text-style: bold; color: $fg; padding: 0 2; height: 1; }
+    #backup-confirm-counts { color: $fg-dim; margin: 0 2; height: auto; }
+    .affordance {
+        color: $fg-dim;
+        padding: 1 2;
+        text-align: center;
+        height: auto;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("Confirm · ready to create backup", classes="screen-title")
+            yield Static("", id="backup-confirm-counts")
+            yield Static(
+                " [reverse]Y[/] Create backup  esc to go back",
+                classes="affordance",
+            )
+
+    def on_mount(self) -> None:
+        stats = getattr(self.app, "backup_scan", None)
+        if stats is None:
+            self.query_one("#backup-confirm-counts", Static).update("No scan data.")
+            return
+        self.query_one("#backup-confirm-counts", Static).update(
+            f"Source:    {self.app.source_path}\n"
+            f"Output:    {self.app.output_path}\n"
+            f"\n"
+            f"Files:     {stats.included_files}\n"
+            f"Bytes:     {_format_bytes(stats.included_bytes)}\n"
+            f"Excluded:  {stats.excluded}\n"
+            + (
+                "\n".join(
+                    f"  {cat_key}: {count}"
+                    for cat_key, count in sorted(stats.per_category.items())
+                )
+                if stats.per_category
+                else ""
+            )
+        )
+
+    def action_do_backup(self) -> None:
+        self.app.push_screen("backup_progress")
+
+
+class BackupProgressScreen(Screen):
+    BINDINGS = [("q", "cancel_backup", "Cancel")]
+
+    _cancel_event: threading.Event
+    CSS = """
+    BackupProgressScreen {
+        align: center middle;
+    }
+    .screen-title { text-style: bold; color: $fg; padding: 0 2; height: 1; }
+    ProgressBar { height: 1; margin: 1 0; }
+    ProgressBar > .bar { color: $accent; }
+    #backup-progress-stats { color: $fg-dim; height: 1; }
+    #backup-progress-log {
+        background: $bg-panel;
+        color: $fg-dim;
+        border: solid $border;
+        height: 1fr;
+        width: 1fr;
+    }
+    .help-text { color: $fg-mute; height: 1; padding: 0 2; text-align: center; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("Creating backup \u2026", classes="screen-title")
+            yield ProgressBar(id="backup-progress-bar", total=100)
+            yield Static("", id="backup-progress-stats")
+            yield RichLog(id="backup-progress-log", highlight=True, max_lines=100)
+            yield Static("q cancel \u2022 backup in progress", classes="help-text")
+
+    def on_mount(self) -> None:
+        self._cancel_event = threading.Event()
+        self.run_worker(self._run_backup(), exclusive=True)
+
+    async def _run_backup(self) -> None:
+        bar = self.query_one("#backup-progress-bar", ProgressBar)
+        stats_w = self.query_one("#backup-progress-stats", Static)
+        log = self.query_one("#backup-progress-log", RichLog)
+        bar.update(progress=0)
+        scan = getattr(self.app, "backup_scan", None)
+        total = max((scan.included_files if scan else 1), 1)
+        done = 0
+
+        def on_event(ev: BackupEvent) -> None:
+            nonlocal done
+            if ev.kind == "archived":
+                done += 1
+                try:
+                    bar.update(progress=int(done / total * 100))
+                    stats_w.update(f"Archived: {done} / {total}")
+                except Exception:
+                    pass
+                log.write(f"  \u2713 {ev.path}")
+            elif ev.kind == "skipped":
+                log.write(f"  - {ev.path}  ({ev.detail})")
+            elif ev.kind == "error":
+                log.write(f"  ! {ev.path}  {ev.detail}")
+            elif ev.kind == "done":
+                bar.update(progress=100)
+                stats_w.update(f"Done: {done} files archived")
+                log.write("\nBackup complete")
+
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            create_backup,
+            Path(self.app.source_path),
+            Path(self.app.output_path),
+            on_event=on_event,  # type: ignore[reportCallIssue]
+            cancel_event=self._cancel_event,  # type: ignore[reportCallIssue]
+        )
+        await asyncio.sleep(0.3)
+        await self.app.push_screen("backup_done")
+
+    def action_cancel_backup(self) -> None:
+        self._cancel_event.set()
+
+
+class BackupDoneScreen(Screen):
+    BINDINGS = [("q", "done", "Done")]
+    CSS = """
+    BackupDoneScreen { align: center middle; }
+    .screen-title { text-style: bold; color: $fg; padding: 0 2; height: 1; }
+    #backup-done-summary { color: $fg-dim; margin: 1 2; height: auto; }
+    .help-text { color: $fg-mute; height: 1; padding: 0 2; text-align: center; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("Backup complete", classes="screen-title")
+            yield Static("", id="backup-done-summary")
+            yield Static("q done", classes="help-text")
+
+    def on_mount(self) -> None:
+        stats = getattr(self.app, "backup_scan", None)
+        out = self.app.output_path
+        self.query_one("#backup-done-summary", Static).update(
+            f"Archive: {out}\n"
+            f"Files:   {stats.included_files if stats else 0}\n"
+            f"Bytes:   {_format_bytes(stats.included_bytes) if stats else '0B'}"
+        )
 
     def action_done(self) -> None:
         self.app.pop_screen()
@@ -613,11 +955,20 @@ class OmarchyRestoreApp(App):
         "confirm": ConfirmScreen,
         "progress": ProgressScreen,
         "done": DoneScreen,
+        "backup_welcome": BackupWelcomeScreen,
+        "backup_preview": BackupPreviewScreen,
+        "backup_confirm": BackupConfirmScreen,
+        "backup_progress": BackupProgressScreen,
+        "backup_done": BackupDoneScreen,
     }
 
+    mode: str = "restore"
     archive_path: str = ""
     target_path: str = ""
     diff_rows: list[DiffRow] = []
+    source_path: str = ""
+    output_path: str = ""
+    backup_scan: object | None = None
     omarchy_theme: object | None = None
 
     def on_mount(self) -> None:
@@ -631,4 +982,7 @@ class OmarchyRestoreApp(App):
             extra_css="",
         )
         self.styles = css_full
-        self.push_screen("welcome")
+        if self.mode == "backup":
+            self.push_screen("backup_welcome")
+        else:
+            self.push_screen("welcome")

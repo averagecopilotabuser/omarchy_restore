@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 import tarfile
+import threading
 import time
 from pathlib import Path
 
@@ -167,3 +168,27 @@ class TestRestoreInterruptSafety:
         rows = _rows_from(archive, target)
         restore_rows(archive, target, rows)
         assert (target / "big.bin").read_bytes() == data
+
+    def test_cancel_event_stops_restore(self, tmp_path: Path) -> None:
+        archive = _build_tarball(
+            tmp_path,
+            [
+                ("a.txt", {"data": b"alpha"}),
+                ("b.txt", {"data": b"beta"}),
+                ("c.txt", {"data": b"gamma"}),
+            ],
+        )
+        target = tmp_path / "home"
+        target.mkdir()
+        rows = _rows_from(archive, target)
+        cancel_event = threading.Event()
+        cancel_event.set()
+        events: list[tuple[str, str | None]] = []
+        res = restore_rows(
+            archive, target, rows,
+            on_event=lambda e: events.append((e.kind, e.detail)),
+            cancel_event=cancel_event,
+        )
+        assert res.stats.written == 0
+        assert res.stats.errors == 0
+        assert events[-1] == ("done", "cancelled")

@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from omarchy_restore.diff import (
+    DiffRow,
     DiffStatus,
     build_diff,
     compare_member_content,
@@ -210,6 +211,48 @@ class TestDiffResult:
         row = result.rows[0]
         row.include = False
         assert len(result.included()) == 0
+
+
+class TestSelectAllSkipsReject:
+    def test_select_all_does_not_toggle_rejected(self, tmp_path: Path) -> None:
+        """Simulate action_select_all logic on diff rows."""
+        reject = DiffRow(
+            name="/etc/shadow",
+            status=DiffStatus.REJECT,
+            category=Category.SECRETS,
+            archive_size=100,
+            disk_size=None,
+            delta_bytes=100,
+            include=False,
+            reason="unsafe path",
+        )
+        normal = DiffRow(
+            name="Documents/a.txt",
+            status=DiffStatus.NEW,
+            category=Category.USER_DATA,
+            archive_size=10,
+            disk_size=None,
+            delta_bytes=10,
+            include=False,
+        )
+        rows = [reject, normal]
+        for r in rows:
+            if r.status is not DiffStatus.REJECT:
+                r.include = True
+        assert not reject.include
+        assert normal.include
+
+
+class TestFormatBytes:
+    def test_format_bytes_outputs(self) -> None:
+        from omarchy_restore.tui.screens import _format_bytes
+        assert _format_bytes(0) == "0B"
+        assert _format_bytes(500) == "500B"
+        assert _format_bytes(1023) == "1023B"
+        assert _format_bytes(1024) == "1.0KB"
+        assert _format_bytes(1536) == "1.5KB"
+        assert _format_bytes(1_048_576) == "1.0MB"
+        assert _format_bytes(1_073_741_824) == "1.0GB"
 
 
 class TestCompareMemberContent:

@@ -124,21 +124,6 @@ def _is_within(child: Path, parent: Path) -> bool:
         return False
 
 
-def _readlink_within(child: str, target: Path) -> bool:
-    """For a symlink whose stored target is ``child``: is it inside ``target``?
-
-    Handles relative targets relative to the symlink's parent directory.
-    """
-    if os.path.isabs(child):
-        candidate = Path(child)
-    else:
-        # We don't know the symlink's exact location here — we only know the
-        # logical member path inside the archive. A relative symlink in a tar
-        # member is resolved against the member's own directory.
-        return True  # defer to runtime resolution; will be re-checked at write
-    return _is_within(candidate, target)
-
-
 def _is_special_mode(mode: int) -> bool:
     """Return True if the mode carries setuid/setgid/sticky bits we should
     notice. We don't *enforce* anything on these here — the restoration
