@@ -1,0 +1,226 @@
+/* omarchy-restore tcss: colors are CSS variables from the active theme */
+
+:root {
+  /* These defaults are overwritten at runtime from the active theme. */
+  bg: #1A1818;
+  bg-panel: #211E1E;
+  bg-elevated: #2A2727;
+  border: #4B4646;
+  border-active: #B7B1B1;
+  fg: #F1ECEC;
+  fg-dim: #B7B1B1;
+  fg-mute: #656363;
+  accent: #E8E2DD;
+  accent-soft: #CFCECD;
+}
+
+Screen {
+  background: $bg;
+  color: $fg;
+}
+
+/* --- Header / footer chrome (1 row, always on $bg) --------------------- */
+#header {
+  height: 1;
+  background: $bg;
+  color: $fg-dim;
+  padding: 0 2;
+  border-bottom: solid $border;
+}
+#header .mark {
+  color: $fg-dim;
+  text-style: bold;
+}
+#header .title {
+  color: $fg;
+  text-style: bold;
+}
+#header .step {
+  color: $fg-dim;
+}
+#header .right {
+  color: $fg-mute;
+  text-align: right;
+}
+
+#footer {
+  height: 1;
+  background: $bg;
+  color: $fg-mute;
+  padding: 0 2;
+  border-top: solid $border;
+}
+#footer .key {
+  color: $fg-mute;
+  text-style: bold;
+}
+#footer .label {
+  color: $fg-dim;
+}
+
+/* --- The single focused panel ------------------------------------------ */
+.panel {
+  background: $bg-panel;
+  border: solid $border;
+  padding: 1 2;
+  height: 1fr;
+}
+.panel:focus {
+  border: solid $border-active;
+}
+
+/* --- Welcome ----------------------------------------------------------- */
+Wordmark {
+  color: $fg;
+}
+Wordmark .mark {
+  color: $fg-dim;
+  text-style: bold;
+}
+.tagline {
+  color: $fg-dim;
+  padding: 0 0 1 0;
+}
+.field-label {
+  color: $fg-mute;
+  text-style: bold;
+}
+#archive-input, #target-input {
+  border: solid $border;
+  background: $bg;
+  color: $fg;
+  padding: 0 1;
+  height: 3;
+  dock: left;
+  width: 1fr;
+}
+#archive-input:focus, #target-input:focus {
+  border: solid $border-active;
+  background: $bg-elevated;
+}
+.scan-button {
+  background: $bg-elevated;
+  color: $fg;
+  border: solid $border;
+  padding: 0 2;
+  height: 3;
+  margin-left: 1;
+}
+.scan-button:focus {
+  border: solid $border-active;
+  background: $bg-elevated;
+}
+
+/* --- Stat / summary blocks --------------------------------------------- */
+.stat-row {
+  color: $fg-dim;
+  padding: 0 0;
+}
+.stat-row .k {
+  color: $fg-mute;
+}
+.stat-row .v {
+  color: $fg;
+  text-style: bold;
+}
+
+/* --- Diff table -------------------------------------------------------- */
+DiffTable {
+  background: $bg-panel;
+  color: $fg;
+  height: 1fr;
+  border: solid $border;
+}
+DiffTable:focus {
+  border: solid $border-active;
+}
+DiffTable > .datatable--header {
+  color: $fg-dim;
+  background: $bg-panel;
+  text-style: bold;
+}
+DiffTable .datatable--cursor {
+  background: $bg-elevated;
+  color: $fg;
+}
+DiffTable .datatable--odd-row {
+  background: $bg-panel;
+}
+DiffTable .datatable--even-row {
+  background: $bg-panel;
+}
+.status-include {
+  color: $fg-mute;
+}
+.status-reject {
+  color: $fg-dim;
+  text-style: bold;
+}
+.cat-chip {
+  color: $fg-mute;
+}
+.cat-chip-active {
+  color: $fg;
+  text-style: bold;
+}
+
+/* --- Confirm ----------------------------------------------------------- */
+.affordance {
+  background: $bg;
+  color: $fg-dim;
+  padding: 1 2;
+  text-align: center;
+}
+.affordance .ykey {
+  background: $bg-elevated;
+  color: $fg;
+  text-style: bold;
+  padding: 0 1;
+}
+.policy-line {
+  color: $fg-mute;
+  padding: 0 0 1 0;
+}
+.warn-line {
+  color: $fg-dim;
+  text-style: bold;
+}
+
+/* --- Progress ---------------------------------------------------------- */
+ProgressBar {
+  height: 1;
+  margin: 1 0;
+}
+ProgressBar > .bar {
+  color: $accent;
+}
+ProgressBar > .bar--indeterminate {
+  color: $accent;
+}
+#progress-log {
+  background: $bg-panel;
+  color: $fg-dim;
+  border: solid $border;
+  height: 1fr;
+}
+#progress-stats {
+  color: $fg-dim;
+}
+
+/* --- Done -------------------------------------------------------------- */
+.summary-box {
+  background: $bg-panel;
+  border: solid $border;
+  padding: 1 2;
+}
+.reload-item {
+  color: $fg-dim;
+  height: auto;
+  padding: 0 0;
+}
+.reload-item.include {
+  color: $fg;
+}
+.reload-check {
+  color: $accent;
+}
